@@ -57,7 +57,32 @@ db.exec(`
     recurring_group   TEXT DEFAULT NULL,
     reminder_sent     INTEGER NOT NULL DEFAULT 0,
     guest_emails      TEXT DEFAULT '[]',
+    gcal_event_id     TEXT DEFAULT NULL,
     created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS waitlist (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL REFERENCES users(id),
+    room_id     TEXT NOT NULL REFERENCES rooms(id),
+    date        TEXT NOT NULL,
+    start_time  TEXT NOT NULL,
+    end_time    TEXT NOT NULL,
+    purpose     TEXT NOT NULL,
+    notified    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS amenity_requests (
+    id          TEXT PRIMARY KEY,
+    booking_id  TEXT NOT NULL REFERENCES bookings(id),
+    user_id     TEXT NOT NULL REFERENCES users(id),
+    room_id     TEXT NOT NULL REFERENCES rooms(id),
+    items       TEXT NOT NULL DEFAULT '[]',
+    notes       TEXT DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending',
+    admin_note  TEXT DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS notifications (
@@ -87,6 +112,7 @@ db.exec(`
   );
 `);
 
+// ─── Safe column migrations ───────────────────────────────────────────────
 const safeAddCol = (table, col, def) => {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch {}
 };
@@ -95,7 +121,9 @@ safeAddCol('bookings', 'checkin_token',   'TEXT DEFAULT NULL');
 safeAddCol('bookings', 'recurring_group', 'TEXT DEFAULT NULL');
 safeAddCol('bookings', 'reminder_sent',   'INTEGER NOT NULL DEFAULT 0');
 safeAddCol('bookings', 'guest_emails',    "TEXT DEFAULT '[]'");
+safeAddCol('bookings', 'gcal_event_id',   'TEXT DEFAULT NULL');
 
+// ─── Seed ─────────────────────────────────────────────────────────────────
 function seed() {
   const adminEmail = process.env.ADMIN_EMAIL || 'admin@company.com';
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(adminEmail);
@@ -109,10 +137,10 @@ function seed() {
   const roomCount = db.prepare('SELECT COUNT(*) as c FROM rooms').get().c;
   if (roomCount === 0) {
     const rooms = [
-      { name: 'Conference Room', cap: 20, color: '#3d6ce7', max_dur: 480, floor: '2nd Floor', amen: ['Projector','Video Call','Whiteboard'] },
-      { name: 'Meeting Room 1',  cap: 10, color: '#16a34a', max_dur: 240, floor: '1st Floor', amen: ['TV Screen','Whiteboard'] },
-      { name: 'Meeting Room 2',  cap: 8,  color: '#7c3aed', max_dur: 240, floor: '1st Floor', amen: ['TV Screen'] },
-      { name: 'Board Room',      cap: 15, color: '#dc2626', max_dur: 480, floor: '3rd Floor', amen: ['Projector','Video Call','Catering'] },
+      { name: 'Conference Room', cap: 20, color: '#3d6ce7', max_dur: 480, floor: '2nd Floor', amen: ['Projector','Video Call','Whiteboard','AC'] },
+      { name: 'Meeting Room 1',  cap: 10, color: '#16a34a', max_dur: 240, floor: '1st Floor', amen: ['TV Screen','Whiteboard','AC'] },
+      { name: 'Meeting Room 2',  cap: 8,  color: '#7c3aed', max_dur: 240, floor: '1st Floor', amen: ['TV Screen','AC'] },
+      { name: 'Board Room',      cap: 15, color: '#dc2626', max_dur: 480, floor: '3rd Floor', amen: ['Projector','Video Call','Catering','AC'] },
     ];
     const ins = db.prepare(`INSERT INTO rooms (id, name, capacity, color, max_dur, floor, amenities) VALUES (?, ?, ?, ?, ?, ?, ?)`);
     rooms.forEach(r => {

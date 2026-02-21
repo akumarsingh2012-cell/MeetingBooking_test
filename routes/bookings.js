@@ -4,7 +4,9 @@ const router = express.Router();
 const db = require('../db/database');
 const { auth, adminOnly } = require('../middleware/auth');
 const emailSvc = require('../services/email');
-const QRCode = require('qrcode');
+const notify   = require('../services/notify');
+const gcalSvc  = require('../services/gcal');
+const QRCode   = require('qrcode');
 
 const genId  = () => `b_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const genNId = () => `n_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -180,10 +182,13 @@ router.post('/', auth, async (req, res) => {
     WHERE b.id = ?
   `).get(firstId);
 
-  // Send emails asynchronously (don't block response)
+  // Send emails + Slack + WhatsApp asynchronously (don't block response)
   emailSvc.sendNewBookingAdmin(formatBooking(booking)).catch(() => {});
+  notify.slackNewBooking(formatBooking(booking)).catch(() => {});
+  notify.waNewBooking(formatBooking(booking)).catch(() => {});
   if (status === 'approved') {
     emailSvc.sendApproved(formatBooking(booking)).catch(() => {});
+    gcalSvc.createEvent(formatBooking(booking)).catch(() => {});
   }
 
   res.status(201).json({
@@ -207,6 +212,8 @@ router.patch('/:id/cancel', auth, async (req, res) => {
   // Send cancellation emails
   const full = db.prepare(`SELECT b.*, u.name as user_name, u.email as user_email, r.name as room_name, r.floor as room_floor FROM bookings b JOIN users u ON u.id=b.user_id JOIN rooms r ON r.id=b.room_id WHERE b.id=?`).get(req.params.id);
   emailSvc.sendCancelled(formatBooking(full)).catch(() => {});
+  notify.slackCancelled(formatBooking(full)).catch(() => {});
+  notify.waCancelled(formatBooking(full)).catch(() => {});
 
   res.json({ message: 'Booking cancelled' });
 });
@@ -255,6 +262,9 @@ router.patch('/:id/approve', auth, adminOnly, async (req, res) => {
   // Send approval email with ICS
   const full = db.prepare(`SELECT b.*, u.name as user_name, u.email as user_email, r.name as room_name, r.floor as room_floor FROM bookings b JOIN users u ON u.id=b.user_id JOIN rooms r ON r.id=b.room_id WHERE b.id=?`).get(req.params.id);
   emailSvc.sendApproved(formatBooking(full)).catch(() => {});
+  notify.slackApproved(formatBooking(full)).catch(() => {});
+  notify.waApproved(formatBooking(full)).catch(() => {});
+  gcalSvc.createEvent(formatBooking(full)).catch(() => {});
 
   res.json({ message: 'Approved', auto_rejected: autoRejected });
 });
@@ -271,8 +281,10 @@ router.patch('/:id/reject', auth, adminOnly, async (req, res) => {
   db.prepare("UPDATE bookings SET status = 'rejected', rejection_reason = ? WHERE id = ?").run(reason, req.params.id);
   addNotification(b.user_id, 'Booking Rejected', `Reason: ${reason}`, 'error');
 
-  const full = db.prepare(`SELECT b.*, u.name as user_name, u.email as user_email, r.name as room_name, r.floor as room_floor FROM bookings b JOIN users u ON u.id=b.user_id JOIN rooms r ON r.id=b.room_id WHERE b.id=?`).get(req.params.id);
-  emailSvc.sendRejected({ ...formatBooking(full), rejection_reason: reason }).catch(() => {});
+  const full2 = db.prepare(`SELECT b.*, u.name as user_name, u.email as user_email, r.name as room_name, r.floor as room_floor FROM bookings b JOIN users u ON u.id=b.user_id JOIN rooms r ON r.id=b.room_id WHERE b.id=?`).get(req.params.id);
+  emailSvc.sendRejected({ ...formatBooking(full2), rejection_reason: reason }).catch(() => {});
+  notify.slackRejected({ ...formatBooking(full2), rejection_reason: reason }).catch(() => {});
+  notify.waRejected({ ...formatBooking(full2), rejection_reason: reason }).catch(() => {});
 
   res.json({ message: 'Rejected' });
 });

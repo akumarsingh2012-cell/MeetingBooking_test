@@ -4,6 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>SLMG Beverages – Meeting Room Booking</title>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -281,7 +282,80 @@ function clearUser() {
   localStorage.removeItem('mrb_token');
 }
 
-// ── STATE CACHE ────────────────────────────────────────────────────────────
+// ── EMAILJS ENGINE ─────────────────────────────────────────────────────────
+// EmailJS sends emails directly from the browser — no SMTP server needed.
+// Admin sets Service ID, Template ID, Public Key in Email Settings page.
+// All values are stored in backend DB and loaded on startup.
+
+let _EJS = { sid: '', tid: '', pk: '', adminEmail: '', ready: false };
+
+async function loadEmailConfig() {
+  try {
+    const cfg = await API.get('/settings');
+    if (cfg.ejs_sid && cfg.ejs_tid && cfg.ejs_pk) {
+      _EJS.sid = cfg.ejs_sid;
+      _EJS.tid = cfg.ejs_tid;
+      _EJS.pk  = cfg.ejs_pk;
+      _EJS.adminEmail = cfg.ejs_admin_email || '';
+      _EJS.ready = true;
+      if (window.emailjs) emailjs.init(_EJS.pk);
+      console.log('✅ EmailJS loaded');
+    }
+  } catch(e) {}
+}
+
+async function ejsSend(params) {
+  if (!_EJS.ready || !window.emailjs) return;
+  try {
+    await emailjs.send(_EJS.sid, _EJS.tid, params);
+    console.log('[EMAIL ✅]', params.subject || params.status);
+  } catch(e) {
+    console.warn('[EMAIL ❌]', e);
+  }
+}
+
+// Helper: fire email for a booking event
+function emailBookingEvent(booking, status, extraParams = {}) {
+  if (!_EJS.ready) return;
+  const toEmail = extraParams.to || _EJS.adminEmail;
+  if (!toEmail) return;
+  ejsSend({
+    to_email:     toEmail,
+    to_name:      extraParams.toName || booking.user_name || '',
+    booked_by:    booking.user_name  || '',
+    room_name:    booking.room_name  || '',
+    room_floor:   booking.room_floor || '',
+    meeting_date: booking.date       || '',
+    start_time:   booking.start_time || '',
+    end_time:     booking.end_time   || '',
+    meeting_type: booking.meeting_type || '',
+    purpose:      booking.purpose    || '',
+    food:         booking.food ? 'Yes – ' + (booking.veg_nonveg || '') : 'No',
+    status:       status,
+    remarks:      booking.remarks    || '',
+    rejection_reason: booking.rejection_reason || '',
+    app_url:      window.location.origin,
+    ...extraParams,
+  });
+}
+
+// Specific triggers called at each event
+function emailOnNewBooking(booking) {
+  // Notify admin
+  if (_EJS.adminEmail) emailBookingEvent(booking, 'New Booking Request', { to: _EJS.adminEmail, subject: `New Booking – ${booking.room_name}` });
+}
+function emailOnApproved(booking) {
+  // Notify the user who booked
+  emailBookingEvent(booking, '✅ Approved', { to: booking.user_email, toName: booking.user_name, subject: `Booking Approved – ${booking.room_name}` });
+}
+function emailOnRejected(booking) {
+  emailBookingEvent(booking, '❌ Not Approved', { to: booking.user_email, toName: booking.user_name, subject: `Booking Rejected – ${booking.room_name}` });
+}
+function emailOnCancelled(booking) {
+  if (_EJS.adminEmail) emailBookingEvent(booking, '🚫 Cancelled', { to: _EJS.adminEmail, subject: `Booking Cancelled – ${booking.room_name}` });
+}
+
+
 // Simple cache to avoid re-fetching rooms/users on every page
 const Cache = { rooms: null, users: null };
 async function getRooms() { if (!Cache.rooms) Cache.rooms = await API.get('/rooms'); return Cache.rooms; }
@@ -294,26 +368,48 @@ let VIEW = '', CY, CM;
 async function nav(v) {
   VIEW = v;
   document.querySelectorAll('.nb').forEach(b => b.classList.toggle('active', b.dataset.v === v));
-  const titles = { dashboard: 'Dashboard', newbooking: 'New Booking', calendar: 'Calendar', timeline: 'Timeline', mybookings: 'My Bookings', approvals: 'Approval Center', rooms: 'Room Control', users: 'User Management', allbookings: 'All Bookings', analytics: 'Analytics', export: 'Export Data', theme: 'Appearance', emailsettings: 'Email Settings', emaillog: 'Email Log' };
+  const titles = { dashboard: 'Dashboard', newbooking: 'New Booking', calendar: 'Calendar', timeline: 'Timeline', mybookings: 'My Bookings', approvals: 'Approval Center', rooms: 'Room Control', users: 'User Management', allbookings: 'All Bookings', analytics: 'Analytics', export: 'Export & Reports', theme: 'Appearance', emailsettings: 'Email Settings', emaillog: 'Email Log', waitlist: 'My Waitlist', amenities: 'Amenity Requests', integrations: 'Integrations' };
   document.getElementById('ttl').textContent = titles[v] || v;
   document.getElementById('tsub').textContent = CU.name + ' · ' + new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
   if (window.innerWidth < 768) document.getElementById('SB').classList.remove('open');
   document.getElementById('MC').innerHTML = '<div style="padding:32px;text-align:center;color:var(--gray);"><div class="spin" style="border-top-color:var(--blue);border-color:var(--border);margin:0 auto;width:28px;height:28px;"></div></div>';
-  const fns = { dashboard: pgDash, newbooking: pgNew, calendar: pgCal, timeline: pgTL, mybookings: pgMine, approvals: pgApprove, rooms: pgRooms, users: pgUsers, allbookings: pgAllBk, analytics: pgAn, export: pgEx, theme: pgTheme, emailsettings: pgEmailSettings, emaillog: pgEmailLog };
+  const fns = { dashboard: pgDash, newbooking: pgNew, calendar: pgCal, timeline: pgTL, mybookings: pgMine, approvals: pgApprove, rooms: pgRooms, users: pgUsers, allbookings: pgAllBk, analytics: pgAn, export: pgEx, theme: pgTheme, emailsettings: pgEmailSettings, emaillog: pgEmailLog, waitlist: pgWaitlist, amenities: pgAmenities, integrations: pgIntegrations };
   if (fns[v]) fns[v]();
 }
 
 async function renderNav() {
-  let pending = 0;
+  let pending = 0, pendingAmenity = 0;
   if (isAdm()) {
     try { const r = await API.get('/bookings/pending-count'); pending = r.count; } catch {}
+    try { const r = await API.get('/amenities/pending-count'); pendingAmenity = r.count; } catch {}
   }
-  const main = [{ i: 'fa-home', l: 'Dashboard', v: 'dashboard' }, { i: 'fa-plus', l: 'New Booking', v: 'newbooking' }, { i: 'fa-calendar', l: 'Calendar', v: 'calendar' }, { i: 'fa-clock', l: 'Timeline', v: 'timeline' }, { i: 'fa-list-alt', l: 'My Bookings', v: 'mybookings' }];
-  const adminNav = isAdm() ? [{ i: 'fa-check-circle', l: 'Approvals', v: 'approvals', n: pending }, { i: 'fa-door-open', l: 'Room Control', v: 'rooms' }, { i: 'fa-users', l: 'Users', v: 'users' }, { i: 'fa-table', l: 'All Bookings', v: 'allbookings' }, { i: 'fa-chart-bar', l: 'Analytics', v: 'analytics' }, { i: 'fa-download', l: 'Export', v: 'export' }] : [];
+  const main = [
+    { i:'fa-home',        l:'Dashboard',    v:'dashboard' },
+    { i:'fa-plus',        l:'New Booking',  v:'newbooking' },
+    { i:'fa-calendar',    l:'Calendar',     v:'calendar' },
+    { i:'fa-clock',       l:'Timeline',     v:'timeline' },
+    { i:'fa-list-alt',    l:'My Bookings',  v:'mybookings' },
+    { i:'fa-clock-rotate-left', l:'Waitlist', v:'waitlist' },
+    { i:'fa-tools',       l:'Amenities',    v:'amenities' },
+  ];
+  const adminNav = isAdm() ? [
+    { i:'fa-check-circle',l:'Approvals',    v:'approvals',  n:pending },
+    { i:'fa-wrench',      l:'Amenity Req.', v:'amenities',  n:pendingAmenity },
+    { i:'fa-door-open',   l:'Room Control', v:'rooms' },
+    { i:'fa-users',       l:'Users',        v:'users' },
+    { i:'fa-table',       l:'All Bookings', v:'allbookings' },
+    { i:'fa-chart-bar',   l:'Analytics',    v:'analytics' },
+    { i:'fa-download',    l:'Export',       v:'export' },
+  ] : [];
   let h = '<div class="ns-lbl">Main</div>' + main.map(nbHtml).join('');
   if (adminNav.length) h += '<div class="ns-lbl">Admin</div>' + adminNav.map(nbHtml).join('');
-  h += '<div class="ns-lbl">Preferences</div>' + nbHtml({ i: 'fa-palette', l: 'Appearance', v: 'theme' });
-  if (isAdm()) h += nbHtml({ i: 'fa-envelope', l: 'Email Settings', v: 'emailsettings' }) + nbHtml({ i: 'fa-history', l: 'Email Log', v: 'emaillog' });
+  h += '<div class="ns-lbl">Settings</div>';
+  h += nbHtml({ i:'fa-palette',   l:'Appearance',     v:'theme' });
+  if (isAdm()) {
+    h += nbHtml({ i:'fa-plug',     l:'Integrations',   v:'integrations' });
+    h += nbHtml({ i:'fa-envelope', l:'Email Settings', v:'emailsettings' });
+    h += nbHtml({ i:'fa-history',  l:'Email Log',      v:'emaillog' });
+  }
   document.getElementById('SN').innerHTML = h;
 }
 
@@ -355,6 +451,7 @@ async function doLogin() {
     document.getElementById('LP').style.display = 'none';
     document.getElementById('AP').style.display = 'block';
     await renderNav(); updTop(); updSU(); nav('dashboard'); updND();
+    loadEmailConfig(); // load EmailJS settings
     toast('Welcome back, ' + CU.name + '!', 'success');
   } catch (err) {
     setLE(err.message);
@@ -457,65 +554,88 @@ async function pgEmailSettings() {
   document.getElementById('ttl').textContent = 'Email Settings';
   let cfg = {};
   try { cfg = await API.get('/settings'); } catch {}
-  const configured = cfg.smtp_configured === 'true';
-  const smtpUser = cfg.smtp_user || '';
-  document.getElementById('MC').innerHTML = `<div style="max-width:640px;">
-    <div class="al ${configured ? 'al-s' : 'al-w'}" style="margin-bottom:16px;">
-      <i class="fas ${configured ? 'fa-check-circle' : 'fa-exclamation-triangle'}"></i>
-      <div><strong>${configured ? '✅ Email notifications active — ' + smtpUser : '⚠️ Email not configured.'}</strong>
-      ${configured ? '<br>Admin and users receive emails for booking events.' : '<br>Set SMTP credentials in your .env file (or Render environment variables) to enable email.'}</div>
+  const isOn = !!(cfg.ejs_sid && cfg.ejs_tid && cfg.ejs_pk);
+  document.getElementById('MC').innerHTML = `<div style="max-width:600px;display:flex;flex-direction:column;gap:14px;">
+    <div class="al ${isOn ? 'al-s' : 'al-w'}">
+      <i class="fas ${isOn ? 'fa-check-circle' : 'fa-exclamation-triangle'}"></i>
+      <div><strong>${isOn ? '✅ Email notifications are active!' : '⚠️ Email not configured yet.'}</strong><br>
+      <span style="font-size:.76rem;">${isOn ? 'Emails fire on new bookings, approvals, rejections and cancellations.' : 'Follow the 3-step setup below — takes about 2 minutes, 100% free.'}</span></div>
     </div>
     <div class="card cb">
-      <div style="font-weight:700;font-size:.9rem;margin-bottom:16px;display:flex;align-items:center;gap:8px;">
-        <div style="width:28px;height:28px;border-radius:7px;background:var(--blue-l);color:var(--blue);display:flex;align-items:center;justify-content:center;"><i class="fas fa-envelope"></i></div>
-        SMTP Configuration
+      <div style="font-weight:700;font-size:.9rem;margin-bottom:14px;">📋 Setup Guide (EmailJS — free, no server needed)</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:var(--bg);border-radius:8px;">
+          <span style="background:var(--blue);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:800;flex-shrink:0;">1</span>
+          <div style="font-size:.79rem;">Go to <a href="https://www.emailjs.com" target="_blank" style="color:var(--blue);font-weight:700;">emailjs.com</a> → Create free account → Dashboard</div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:var(--bg);border-radius:8px;">
+          <span style="background:var(--blue);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:800;flex-shrink:0;">2</span>
+          <div style="font-size:.79rem;"><strong>Email Services</strong> → Add New Service → connect your Gmail → copy <strong>Service ID</strong><br><strong>Email Templates</strong> → Create Template → set <code style="background:var(--card-border);padding:1px 5px;border-radius:3px;">To Email: {{to_email}}</code> → copy <strong>Template ID</strong><br><strong>Account → API Keys</strong> → copy <strong>Public Key</strong></div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:var(--bg);border-radius:8px;">
+          <span style="background:var(--blue);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:800;flex-shrink:0;">3</span>
+          <div style="font-size:.79rem;">Paste all 3 keys below → Save & Activate → done!</div>
+        </div>
       </div>
-      <div class="al al-i" style="margin-bottom:16px;"><i class="fas fa-info-circle"></i><div>Email settings are configured via <strong>environment variables</strong> in your .env file or Render dashboard. They cannot be changed from the UI for security reasons.</div></div>
-      <div style="background:var(--bg);border-radius:8px;padding:14px;font-family:monospace;font-size:.75rem;color:var(--text);margin-bottom:16px;line-height:1.8;">
-        <div><strong>SMTP_HOST</strong>=smtp.gmail.com</div>
-        <div><strong>SMTP_PORT</strong>=587</div>
-        <div><strong>SMTP_USER</strong>=your-email@gmail.com</div>
-        <div><strong>SMTP_PASS</strong>=your-app-password</div>
-        <div><strong>EMAIL_FROM</strong>="SLMG Meeting Room &lt;your-email@gmail.com&gt;"</div>
-        <div><strong>REMINDER_MINUTES</strong>=30</div>
-        <div><strong>APP_URL</strong>=https://your-app.onrender.com</div>
-      </div>
-      <div style="font-weight:700;font-size:.84rem;margin-bottom:12px;">📧 Send Test Email</div>
-      <div id="ejsErr"></div>
-      <div style="display:flex;gap:8px;align-items:flex-end;">
-        <div class="fg" style="flex:1;margin-bottom:0;"><label class="lbl">Recipient Email</label><input id="testEmail" class="inp" type="email" placeholder="abhishek.s@slmgbev.com" value="${smtpUser}"/></div>
-        <button class="btn btn-blue" onclick="sendTestEmail()" ${!configured ? 'disabled title="Configure SMTP first"' : ''}><i class="fas fa-paper-plane"></i> Send Test</button>
+      <div style="background:var(--bg);border-radius:8px;padding:10px 14px;margin-top:10px;">
+        <div style="font-size:.72rem;font-weight:700;margin-bottom:6px;color:var(--gray);">Available template variables:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+          ${['{{to_email}}','{{to_name}}','{{booked_by}}','{{room_name}}','{{meeting_date}}','{{start_time}}','{{end_time}}','{{meeting_type}}','{{purpose}}','{{food}}','{{status}}','{{rejection_reason}}','{{app_url}}'].map(v => '<span style="background:var(--blue-l);color:var(--blue);padding:2px 7px;border-radius:4px;font-size:.68rem;font-family:monospace;">'+v+'</span>').join('')}
+        </div>
       </div>
     </div>
-    <div class="card cb" style="margin-top:14px;">
-      <div style="font-weight:700;font-size:.9rem;margin-bottom:16px;display:flex;align-items:center;gap:8px;">
-        <div style="width:28px;height:28px;border-radius:7px;background:var(--orange-l);color:var(--orange);display:flex;align-items:center;justify-content:center;"><i class="fas fa-bell"></i></div>
-        Email Triggers
+    <div class="card cb">
+      <div style="font-weight:700;font-size:.9rem;margin-bottom:14px;">🔑 Your EmailJS Keys</div>
+      <div id="ejsErr"></div>
+      <div class="row2">
+        <div class="fg"><label class="lbl">Service ID *</label><input id="ejsSid" class="inp" value="${E(cfg.ejs_sid||'')}" placeholder="service_xxxxxxx"/></div>
+        <div class="fg"><label class="lbl">Template ID *</label><input id="ejsTid" class="inp" value="${E(cfg.ejs_tid||'')}" placeholder="template_xxxxxxx"/></div>
+        <div class="fg"><label class="lbl">Public Key *</label><input id="ejsPk" class="inp" value="${E(cfg.ejs_pk||'')}" placeholder="xxxxxxxxxxxxxxxxxxxx"/></div>
+        <div class="fg"><label class="lbl">Admin Email (receives new booking alerts) *</label><input id="ejsAdm" class="inp" type="email" value="${E(cfg.ejs_admin_email||'')}" placeholder="abhishek.s@slmgbev.com"/></div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        ${[
-          ['📅 New Booking → Admin','Sent immediately when any booking is created'],
-          ['✅ Approved → User + Guests','Sent when admin approves; includes .ics calendar file'],
-          ['❌ Rejected → User','Sent when booking is rejected, includes reason'],
-          ['🚫 Cancelled → Admin + User','Sent when booking is cancelled'],
-          ['⏰ Reminder → User','Sent 30 min before meeting (configurable via REMINDER_MINUTES)'],
-          ['📨 Guest Invite → External Emails','Calendar invite sent to all guests when approved'],
-        ].map(([t,d]) => `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px;background:var(--bg);border-radius:8px;">
-          <i class="fas fa-check-circle" style="color:var(--green);margin-top:1px;flex-shrink:0;"></i>
-          <div><div style="font-weight:600;font-size:.8rem;">${t}</div><div style="font-size:.72rem;color:var(--gray);margin-top:2px;">${d}</div></div>
-        </div>`).join('')}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
+        <button class="btn btn-blue btn-lg" onclick="saveEmailJS()"><i class="fas fa-save"></i> Save & Activate</button>
+        <button class="btn btn-gray btn-lg" onclick="testEmailJS()" ${!isOn ? 'disabled' : ''}><i class="fas fa-paper-plane"></i> Send Test</button>
+        ${isOn ? '<button class="btn btn-red btn-sm" onclick="clearEmailJS()"><i class="fas fa-trash"></i> Remove</button>' : ''}
       </div>
     </div>
   </div>`;
 }
 
-async function sendTestEmail() {
-  const to = document.getElementById('testEmail').value.trim();
-  if (!to) { mErr('ejsErr', 'Enter recipient email.'); return; }
+async function saveEmailJS() {
+  const sid = document.getElementById('ejsSid').value.trim();
+  const tid = document.getElementById('ejsTid').value.trim();
+  const pk  = document.getElementById('ejsPk').value.trim();
+  const adm = document.getElementById('ejsAdm').value.trim();
+  if (!sid||!tid||!pk||!adm) { mErr('ejsErr','All 4 fields required.'); return; }
   try {
-    await API.post('/settings/test-email', { to });
-    toast('Test email sent to ' + to, 'success');
-  } catch (err) { mErr('ejsErr', err.message); }
+    await API.put('/settings', { ejs_sid:sid, ejs_tid:tid, ejs_pk:pk, ejs_admin_email:adm });
+    _EJS = { sid, tid, pk, adminEmail:adm, ready:true };
+    if (window.emailjs) emailjs.init(pk);
+    toast('✅ Email activated! Test it with the button above.', 'success');
+    pgEmailSettings();
+  } catch(err) { mErr('ejsErr', err.message); }
+}
+
+async function clearEmailJS() {
+  if (!confirm('Remove email configuration?')) return;
+  await API.put('/settings', { ejs_sid:'', ejs_tid:'', ejs_pk:'', ejs_admin_email:'' });
+  _EJS = { sid:'', tid:'', pk:'', adminEmail:'', ready:false };
+  toast('Email config removed.', 'info');
+  pgEmailSettings();
+}
+
+async function testEmailJS() {
+  if (!_EJS.ready || !window.emailjs) { toast('Save your EmailJS keys first.','warning'); return; }
+  await ejsSend({
+    to_email: _EJS.adminEmail, to_name: CU.name,
+    booked_by: CU.name, room_name: 'Test Room', room_floor: '2nd Floor',
+    meeting_date: new Date().toISOString().split('T')[0],
+    start_time: '10:00', end_time: '11:00',
+    meeting_type: 'internal', purpose: '✅ EmailJS test — everything is working!',
+    food: 'No', status: 'Test Notification', remarks: '', rejection_reason: '', app_url: window.location.origin,
+  });
+  toast('Test email sent to ' + _EJS.adminEmail, 'success');
 }
 
 // ── DASHBOARD ──────────────────────────────────────────────────────────────
@@ -711,6 +831,9 @@ async function submitBk() {
   try {
     const result = await API.post('/bookings', { room_id: rid, date: dt, start_time: s, end_time: e, meeting_type: tp, purpose: pu, persons: pp, food: fd2 === 'true', veg_nonveg: fd2 === 'true' ? vegType : '', remarks: rm2, guest_emails: guestEmails, recurring, recurring_end: recurringEnd });
     const recMsg = result.recurring_count > 1 ? ` (${result.recurring_count} occurrences created)` : '';
+    // Fire email notification
+    emailOnNewBooking(result);
+    if (result.status === 'approved') emailOnApproved(result);
     toast(tp === 'external' ? `Submitted for approval!${recMsg}` : `Booking confirmed!${recMsg}`, 'success');
     nav('mybookings');
   } catch (err) { er.innerHTML = `<div class="al al-e"><i class="fas fa-exclamation-circle"></i>${E(err.message)}</div>`; btn.innerHTML = '<i class="fas fa-check"></i> Submit Booking'; btn.disabled = false; }
@@ -792,7 +915,7 @@ function confCancelRecurring(id) {
 function confCancel(id) {
   modal('Cancel Booking', '<p style="color:var(--gray);font-size:.82rem;">Are you sure you want to cancel this booking?</p>',
     [{ l: 'Keep It', c: 'btn-gray', f: closeModal }, { l: 'Yes, Cancel', c: 'btn-red', f: async () => {
-      try { await API.patch('/bookings/' + id + '/cancel'); closeModal(); toast('Cancelled.', 'info'); if (VIEW === 'mybookings') pgMine(); else if (VIEW === 'allbookings') pgAllBk(); else if (VIEW === 'approvals') pgApprove(); else pgDash(); }
+      try { const b = await API.get('/bookings/' + id); await API.patch('/bookings/' + id + '/cancel'); emailOnCancelled(b); closeModal(); toast('Cancelled.', 'info'); if (VIEW === 'mybookings') pgMine(); else if (VIEW === 'allbookings') pgAllBk(); else if (VIEW === 'approvals') pgApprove(); else pgDash(); }
       catch (err) { toast(err.message, 'error'); }
     }}]);
 }
@@ -869,12 +992,24 @@ async function pgApprove() {
   } catch (err) { document.getElementById('MC').innerHTML = `<div class="al al-e">${E(err.message)}</div>`; }
 }
 
-async function doApprove(id) { try { await API.patch('/bookings/' + id + '/approve'); toast('Approved!', 'success'); renderNav(); pgApprove(); } catch (err) { toast(err.message, 'error'); } }
+async function doApprove(id) {
+  try {
+    const b = await API.get('/bookings/' + id);
+    await API.patch('/bookings/' + id + '/approve');
+    emailOnApproved(b);
+    toast('Approved!', 'success'); renderNav(); pgApprove();
+  } catch (err) { toast(err.message, 'error'); }
+}
 function openReject(id) {
   modal('Reject Booking', '<p style="color:var(--gray);font-size:.78rem;margin-bottom:12px;">Provide a reason (shown to user).</p><div class="fg"><label class="lbl">Reason *</label><textarea id="rjR" class="ta" placeholder="e.g. Room unavailable..."></textarea></div>',
     [{ l: 'Cancel', c: 'btn-gray', f: closeModal }, { l: 'Confirm Rejection', c: 'btn-red', f: async () => {
       const r = document.getElementById('rjR').value.trim(); if (!r) { toast('Please enter a reason.', 'warning'); return; }
-      try { await API.patch('/bookings/' + id + '/reject', { reason: r }); closeModal(); toast('Rejected.', 'info'); renderNav(); pgApprove(); } catch (err) { toast(err.message, 'error'); }
+      try {
+        const b = await API.get('/bookings/' + id);
+        await API.patch('/bookings/' + id + '/reject', { reason: r });
+        emailOnRejected({ ...b, rejection_reason: r });
+        closeModal(); toast('Rejected.', 'info'); renderNav(); pgApprove();
+      } catch (err) { toast(err.message, 'error'); }
     }}]);
 }
 
@@ -1140,7 +1275,267 @@ async function expXLSX() {
 
 function dlFile(content, name, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([content], { type })); a.download = name; a.click(); }
 
-// ── STARTUP ────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// ── WAITLIST PAGE ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+async function pgWaitlist() {
+  try {
+    const list = await API.get('/waitlist');
+    let h = `<div class="ph"><div style="font-size:1.1rem;font-weight:700;">My Waitlist <span style="font-size:.76rem;font-weight:400;color:var(--gray);">(${list.length})</span></div><button class="btn btn-blue" onclick="showJoinWaitlist()"><i class="fas fa-plus"></i> Join Waitlist</button></div>`;
+    if (!list.length) {
+      h += `<div class="card"><div class="empty" style="padding:48px;"><i class="fas fa-clock" style="font-size:2rem;opacity:.2;display:block;margin-bottom:10px;"></i><p style="font-weight:600;margin-bottom:4px;">No waitlist entries</p><p style="font-size:.78rem;color:var(--gray);">Join a waitlist for a slot that is currently booked — you'll be notified when it opens.</p><button class="btn btn-blue" style="margin-top:14px;" onclick="showJoinWaitlist()"><i class="fas fa-plus"></i> Join Waitlist</button></div></div>`;
+    } else {
+      const rows = list.map(w => `<tr>
+        <td><strong>${fd(w.date)}</strong></td>
+        <td><span style="color:${w.room_color};font-weight:700;">${E(w.room_name)}</span><br><span style="font-size:.68rem;color:var(--gray);">${E(w.room_floor||'')}</span></td>
+        <td style="font-size:.74rem;">${ft(w.start_time)} – ${ft(w.end_time)}</td>
+        <td style="font-size:.74rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${E(w.purpose)}</td>
+        <td><span class="bdg ${w.notified ? 'ba' : 'bc'}">${w.notified ? '🔔 Notified' : '⏳ Waiting'}</span></td>
+        <td><button class="btn btn-red btn-sm" onclick="leaveWaitlist('${w.id}')"><i class="fas fa-times"></i> Leave</button></td>
+      </tr>`).join('');
+      h += `<div class="card"><div class="tw"><table><thead><tr><th>Date</th><th>Room</th><th>Time Slot</th><th>Purpose</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    }
+    document.getElementById('MC').innerHTML = h;
+  } catch (err) { document.getElementById('MC').innerHTML = `<div class="al al-e">${E(err.message)}</div>`; }
+}
+
+async function showJoinWaitlist() {
+  const rooms = (await getRooms()).filter(r => !r.blocked);
+  let ro = '<option value="">Select room</option>' + rooms.map(r => `<option value="${r.id}">${E(r.name)} – ${E(r.floor||'')}</option>`).join('');
+  let to = '<option value="">Select</option>';
+  for (let h = 9; h < 20; h++) for (let m = 0; m < 60; m += 30) { const t = m2t(h*60+m); to += `<option value="${t}">${ft(t)}</option>`; }
+  modal('Join Waitlist', `<div class="al al-i" style="margin-bottom:12px;"><i class="fas fa-info-circle"></i>You'll get an email + notification when this slot becomes available.</div>
+    <div id="wlErr"></div>
+    <div class="fg"><label class="lbl">Room *</label><select id="wlR" class="sel">${ro}</select></div>
+    <div class="fg"><label class="lbl">Date *</label><input type="date" id="wlD" class="inp" min="${td()}"/></div>
+    <div class="row2">
+      <div class="fg"><label class="lbl">Start Time *</label><select id="wlS" class="sel">${to}</select></div>
+      <div class="fg"><label class="lbl">End Time *</label><select id="wlE" class="sel">${to}</select></div>
+    </div>
+    <div class="fg"><label class="lbl">Purpose *</label><input id="wlP" class="inp" placeholder="Why you need this slot"/></div>`,
+  [{ l:'Cancel', c:'btn-gray', f:closeModal }, { l:'Join Waitlist', c:'btn-blue', f: async () => {
+    const room_id=document.getElementById('wlR').value, date=document.getElementById('wlD').value,
+          start_time=document.getElementById('wlS').value, end_time=document.getElementById('wlE').value,
+          purpose=document.getElementById('wlP').value.trim();
+    if (!room_id||!date||!start_time||!end_time||!purpose) { mErr('wlErr','All fields required.'); return; }
+    try { await API.post('/waitlist', {room_id,date,start_time,end_time,purpose}); closeModal(); toast('Added to waitlist!','success'); pgWaitlist(); }
+    catch(err) { mErr('wlErr',err.message); }
+  }}]);
+}
+
+async function leaveWaitlist(id) {
+  modal('Leave Waitlist','<p style="color:var(--gray);font-size:.82rem;">Remove yourself from this waitlist entry?</p>',
+    [{ l:'Keep', c:'btn-gray', f:closeModal }, { l:'Remove', c:'btn-red', f: async () => {
+      try { await API.delete('/waitlist/'+id); closeModal(); toast('Removed.','info'); pgWaitlist(); }
+      catch(err) { toast(err.message,'error'); }
+    }}]);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ── AMENITY REQUESTS PAGE ─────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+async function pgAmenities() {
+  try {
+    const [list, bks] = await Promise.all([API.get('/amenities'), API.get('/bookings')]);
+    const activeBks = bks.filter(b => b.status === 'approved' && b.date >= td());
+    const AMENITY_OPTIONS = ['Projector','Whiteboard','Video Call Setup','Microphone','Speakers','Laptop','Extension Cord','Flip Chart','Markers','Water/Tea','Air Freshener','Extra Chairs'];
+
+    let h = `<div class="ph"><div style="font-size:1.1rem;font-weight:700;">Amenity Requests <span style="font-size:.76rem;font-weight:400;color:var(--gray);">(${list.length})</span></div><button class="btn btn-blue" onclick="showRequestAmenity()"><i class="fas fa-plus"></i> New Request</button></div>`;
+
+    if (!list.length) {
+      h += `<div class="card"><div class="empty" style="padding:48px;"><i class="fas fa-tools" style="font-size:2rem;opacity:.2;display:block;margin-bottom:10px;"></i><p style="font-weight:600;margin-bottom:4px;">No amenity requests</p><p style="font-size:.78rem;color:var(--gray);">Request items like projectors, whiteboards, catering for your meetings.</p><button class="btn btn-blue" style="margin-top:14px;" onclick="showRequestAmenity()"><i class="fas fa-plus"></i> New Request</button></div></div>`;
+    } else {
+      const statusColor = { pending:'var(--orange)', approved:'var(--green)', rejected:'var(--red)' };
+      const rows = list.map(ar => {
+        const items = Array.isArray(ar.items) ? ar.items.join(', ') : ar.items;
+        const isAdmin = isAdm();
+        return `<tr>
+          <td><div style="font-weight:600;font-size:.78rem;">${E(ar.room_name)}</div><div style="font-size:.68rem;color:var(--gray);">${fd(ar.date)} · ${ft(ar.start_time)}–${ft(ar.end_time)}</div></td>
+          ${isAdmin ? `<td style="font-size:.76rem;">${E(ar.user_name)}</td>` : ''}
+          <td style="font-size:.74rem;max-width:180px;">${E(items)}</td>
+          <td style="font-size:.72rem;color:var(--gray);">${E(ar.notes||'—')}</td>
+          <td><span class="bdg" style="background:${statusColor[ar.status]}18;color:${statusColor[ar.status]};">${ar.status.toUpperCase()}</span></td>
+          <td>${ar.admin_note ? `<span style="font-size:.68rem;color:var(--gray);">${E(ar.admin_note)}</span>` : ''}
+          ${isAdmin && ar.status==='pending' ? `<div style="display:flex;gap:4px;margin-top:4px;"><button class="btn btn-grn btn-sm" onclick="respondAmenity('${ar.id}','approved')">✓ Approve</button><button class="btn btn-red btn-sm" onclick="respondAmenity('${ar.id}','rejected')">✗ Reject</button></div>` : ''}</td>
+        </tr>`;
+      }).join('');
+      const adminCol = isAdm() ? '<th>User</th>' : '';
+      h += `<div class="card"><div class="tw"><table><thead><tr><th>Meeting</th>${adminCol}<th>Requested Items</th><th>Notes</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    }
+    document.getElementById('MC').innerHTML = h;
+  } catch (err) { document.getElementById('MC').innerHTML = `<div class="al al-e">${E(err.message)}</div>`; }
+}
+
+async function showRequestAmenity() {
+  const bks = (await API.get('/bookings')).filter(b => b.status === 'approved' && b.date >= td());
+  if (!bks.length) { modal('No Active Bookings','<p style="color:var(--gray);">You have no upcoming approved bookings to request amenities for.</p>',[{l:'Close',c:'btn-gray',f:closeModal}]); return; }
+  const ITEMS = ['Projector','Whiteboard','Video Call Setup','Microphone','Speakers','Laptop','Extension Cord','Flip Chart','Markers','Water/Tea','Air Freshener','Extra Chairs'];
+  const bkOpts = bks.map(b => `<option value="${b.id}">${E(b.room_name)} – ${fd(b.date)} ${ft(b.start_time)}</option>`).join('');
+  const itemChks = ITEMS.map(i => `<label style="display:flex;align-items:center;gap:6px;padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:.76rem;cursor:pointer;transition:all .1s;" onclick="toggleItem(this)">
+    <input type="checkbox" value="${i}" style="display:none;"/><span>${i}</span></label>`).join('');
+
+  modal('Request Amenities', `<div id="arErr"></div>
+    <div class="fg"><label class="lbl">Meeting *</label><select id="arBk" class="sel">${bkOpts}</select></div>
+    <div class="fg"><label class="lbl">Items Needed *</label><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;" id="itemGrid">${itemChks}</div></div>
+    <div class="fg"><label class="lbl">Additional Notes</label><textarea id="arNotes" class="ta" placeholder="Any special instructions..."></textarea></div>`,
+  [{ l:'Cancel', c:'btn-gray', f:closeModal }, { l:'Submit Request', c:'btn-blue', f: async () => {
+    const booking_id = document.getElementById('arBk').value;
+    const items = [...document.querySelectorAll('#itemGrid input:checked')].map(c => c.value);
+    const notes = document.getElementById('arNotes').value.trim();
+    if (!items.length) { mErr('arErr','Select at least one item.'); return; }
+    try { await API.post('/amenities', {booking_id, items, notes}); closeModal(); toast('Request submitted!','success'); pgAmenities(); }
+    catch(err) { mErr('arErr', err.message); }
+  }}]);
+}
+
+function toggleItem(label) {
+  const chk = label.querySelector('input');
+  chk.checked = !chk.checked;
+  label.style.borderColor = chk.checked ? 'var(--blue)' : 'var(--border)';
+  label.style.background = chk.checked ? 'var(--blue-l)' : '';
+  label.style.color = chk.checked ? 'var(--blue)' : '';
+}
+
+function respondAmenity(id, status) {
+  const isApprove = status === 'approved';
+  modal(`${isApprove ? 'Approve' : 'Reject'} Amenity Request`,
+    `<div id="arResErr"></div>${!isApprove ? '<div class="fg"><label class="lbl">Reason / Note</label><textarea id="arNote" class="ta" placeholder="Optional note to user..."></textarea></div>' : '<p style="color:var(--gray);font-size:.82rem;">Approve this amenity request?</p>'}`,
+  [{ l:'Cancel', c:'btn-gray', f:closeModal }, { l: isApprove?'Approve':'Reject', c: isApprove?'btn-grn':'btn-red', f: async () => {
+    const admin_note = (document.getElementById('arNote')||{}).value||'';
+    try { await API.patch('/amenities/'+id+'/respond', {status, admin_note}); closeModal(); toast(isApprove?'Approved!':'Rejected.','success'); renderNav(); pgAmenities(); }
+    catch(err) { mErr('arResErr', err.message); }
+  }}]);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ── INTEGRATIONS PAGE (Google Calendar + Slack + WhatsApp) ───────────────
+// ══════════════════════════════════════════════════════════════════════════
+async function pgIntegrations() {
+  if (!isAdm()) return;
+  let gcalStatus = { configured: false, auth_url: null };
+  let cfg = {};
+  try { [gcalStatus, cfg] = await Promise.all([API.get('/gcal/status'), API.get('/settings')]); } catch {}
+
+  const slackOn = !!(cfg.slack_webhook);
+  const waOn    = !!(cfg.twilio_sid && cfg.twilio_token);
+
+  document.getElementById('MC').innerHTML = `<div style="max-width:680px;display:flex;flex-direction:column;gap:16px;">
+
+    <!-- Google Calendar -->
+    <div class="card cb">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <div style="width:42px;height:42px;border-radius:10px;background:#fff;border:1.5px solid #e2e8f0;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="24" height="24" viewBox="0 0 24 24"><path fill="#4285F4" d="M19.5 3h-15A1.5 1.5 0 003 4.5v15A1.5 1.5 0 004.5 21h15a1.5 1.5 0 001.5-1.5v-15A1.5 1.5 0 0019.5 3zm-10 13H7v-6h2.5v6zm5 0h-2.5v-6H14v6zm2.5-8h-10V6h10v2z"/></svg>
+        </div>
+        <div style="flex:1;"><div style="font-weight:700;font-size:.9rem;">Google Calendar</div><div style="font-size:.72rem;color:var(--gray);">Auto-sync approved bookings to your Google Calendar</div></div>
+        <span class="bdg ${gcalStatus.configured ? 'ba' : 'bc'}">${gcalStatus.configured ? '✅ Connected' : '⚪ Not Connected'}</span>
+      </div>
+      <div id="gcalErr"></div>
+      <div class="row2">
+        <div class="fg"><label class="lbl">Google Client ID</label><input id="gcalCid" class="inp" value="${E(cfg.gcal_client_id||'')}" placeholder="xxxx.apps.googleusercontent.com"/></div>
+        <div class="fg"><label class="lbl">Google Client Secret</label><input id="gcalSec" class="inp" type="password" value="${cfg.gcal_client_secret ? '••••••••' : ''}" placeholder="GOCSPX-xxxxxx"/></div>
+      </div>
+      <div class="fg"><label class="lbl">Calendar ID <span style="color:var(--gray);font-weight:400;">(use "primary" for default calendar)</span></label><input id="gcalCal" class="inp" value="${E(cfg.gcal_calendar_id||'primary')}" placeholder="primary or calendar@group.calendar.google.com"/></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button class="btn btn-blue" onclick="saveGcal()"><i class="fas fa-save"></i> Save & Get Auth Link</button>
+        ${gcalStatus.auth_url ? `<a href="${gcalStatus.auth_url}" target="_blank" class="btn btn-grn"><i class="fab fa-google"></i> Connect Google Account</a>` : ''}
+        ${gcalStatus.configured ? '<span class="bdg ba">✅ Calendar sync active — new approvals sync automatically</span>' : ''}
+      </div>
+      <div class="al al-i" style="margin-top:12px;"><i class="fas fa-info-circle"></i><div style="font-size:.72rem;">Setup: <a href="https://console.cloud.google.com" target="_blank" style="color:var(--blue);">console.cloud.google.com</a> → APIs & Services → Credentials → Create OAuth 2.0 Client ID → Add redirect URI: <code>${window.location.origin}/api/gcal/callback</code></div></div>
+    </div>
+
+    <!-- Slack -->
+    <div class="card cb">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <div style="width:42px;height:42px;border-radius:10px;background:#611f69;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 01-2.521-2.52A2.528 2.528 0 018.834 0a2.527 2.527 0 012.521 2.522v2.52H8.834zm0 1.271a2.527 2.527 0 012.521 2.521 2.527 2.527 0 01-2.521 2.521H2.522A2.528 2.528 0 010 8.834a2.528 2.528 0 012.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.528 2.528 0 01-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 01-2.523 2.521 2.527 2.527 0 01-2.52-2.521V2.522A2.527 2.527 0 0115.165 0a2.528 2.528 0 012.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 012.523 2.522A2.528 2.528 0 0115.165 24a2.527 2.527 0 01-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 01-2.52-2.523 2.526 2.526 0 012.52-2.52h6.313A2.527 2.527 0 0124 15.165a2.528 2.528 0 01-2.522 2.523h-6.313z"/></svg>
+        </div>
+        <div style="flex:1;"><div style="font-weight:700;font-size:.9rem;">Slack Notifications</div><div style="font-size:.72rem;color:var(--gray);">Send booking events to a Slack channel via Incoming Webhook</div></div>
+        <span class="bdg ${slackOn ? 'ba' : 'bc'}">${slackOn ? '✅ Active' : '⚪ Off'}</span>
+      </div>
+      <div id="slackErr"></div>
+      <div class="fg"><label class="lbl">Webhook URL</label><input id="slackWh" class="inp" value="${E(cfg.slack_webhook||'')}" placeholder="https://hooks.slack.com/services/T.../B.../xxx"/></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-blue" onclick="saveSlack()"><i class="fas fa-save"></i> Save</button>
+        ${slackOn ? '<button class="btn btn-gray" onclick="testSlack()"><i class="fas fa-paper-plane"></i> Send Test</button>' : ''}
+        ${slackOn ? '<button class="btn btn-red btn-sm" onclick="clearSlack()"><i class="fas fa-trash"></i> Remove</button>' : ''}
+      </div>
+      <div class="al al-i" style="margin-top:12px;"><i class="fas fa-info-circle"></i><div style="font-size:.72rem;">Setup: <a href="https://api.slack.com/apps" target="_blank" style="color:var(--blue);">api.slack.com/apps</a> → Create App → Incoming Webhooks → Add to Channel → Copy URL</div></div>
+    </div>
+
+    <!-- WhatsApp -->
+    <div class="card cb">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <div style="width:42px;height:42px;border-radius:10px;background:#25D366;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M11.999 0C5.372 0 0 5.373 0 12c0 2.117.554 4.099 1.523 5.82L.051 23.98l6.336-1.447A11.943 11.943 0 0012 24c6.627 0 12-5.373 12-12S18.626 0 11.999 0zm.001 21.818a9.81 9.81 0 01-5.012-1.371l-.36-.214-3.736.853.87-3.646-.235-.374A9.818 9.818 0 012.182 12C2.182 6.579 6.58 2.182 12 2.182c5.422 0 9.818 4.397 9.818 9.818 0 5.422-4.396 9.818-9.818 9.818z"/></svg>
+        </div>
+        <div style="flex:1;"><div style="font-weight:700;font-size:.9rem;">WhatsApp Notifications <span style="font-size:.68rem;background:var(--orange-l);color:var(--orange);padding:2px 6px;border-radius:4px;font-weight:700;">via Twilio</span></div><div style="font-size:.72rem;color:var(--gray);">Send booking alerts to admin's WhatsApp number</div></div>
+        <span class="bdg ${waOn ? 'ba' : 'bc'}">${waOn ? '✅ Active' : '⚪ Off'}</span>
+      </div>
+      <div id="waErr"></div>
+      <div class="row2">
+        <div class="fg"><label class="lbl">Twilio Account SID</label><input id="waSid" class="inp" value="${E(cfg.twilio_sid||'')}" placeholder="ACxxxxxxxxxxxxxxxx"/></div>
+        <div class="fg"><label class="lbl">Auth Token</label><input id="waToken" class="inp" type="password" value="${cfg.twilio_token ? '••••••••' : ''}" placeholder="your_auth_token"/></div>
+        <div class="fg"><label class="lbl">From (Twilio WA number)</label><input id="waFrom" class="inp" value="${E(cfg.twilio_from||'')}" placeholder="whatsapp:+14155238886"/></div>
+        <div class="fg"><label class="lbl">To (Admin WA number)</label><input id="waTo" class="inp" value="${E(cfg.twilio_to||'')}" placeholder="whatsapp:+919876543210"/></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-blue" onclick="saveWhatsApp()"><i class="fas fa-save"></i> Save</button>
+        ${waOn ? '<button class="btn btn-red btn-sm" onclick="clearWhatsApp()"><i class="fas fa-trash"></i> Remove</button>' : ''}
+      </div>
+      <div class="al al-i" style="margin-top:12px;"><i class="fas fa-info-circle"></i><div style="font-size:.72rem;">Setup: <a href="https://console.twilio.com" target="_blank" style="color:var(--blue);">console.twilio.com</a> → Messaging → Try WhatsApp → Sandbox → Join with code → use sandbox number as "From"</div></div>
+    </div>
+
+  </div>`;
+}
+
+// Google Calendar helpers
+async function saveGcal() {
+  const gcal_client_id = document.getElementById('gcalCid').value.trim();
+  const gcal_client_secret = document.getElementById('gcalSec').value.trim();
+  const gcal_calendar_id = document.getElementById('gcalCal').value.trim() || 'primary';
+  if (!gcal_client_id) { mErr('gcalErr','Client ID required.'); return; }
+  try {
+    const r = await API.put('/gcal/settings', { gcal_client_id, gcal_client_secret: gcal_client_secret === '••••••••' ? undefined : gcal_client_secret, gcal_calendar_id });
+    toast('Saved! Click "Connect Google Account" to authorize.', 'success');
+    pgIntegrations();
+  } catch(err) { mErr('gcalErr', err.message); }
+}
+
+// Slack helpers
+async function saveSlack() {
+  const slack_webhook = document.getElementById('slackWh').value.trim();
+  if (!slack_webhook) { mErr('slackErr','Webhook URL required.'); return; }
+  try { await API.put('/settings', { slack_webhook }); toast('Slack configured!','success'); pgIntegrations(); }
+  catch(err) { mErr('slackErr', err.message); }
+}
+async function clearSlack() {
+  await API.put('/settings', { slack_webhook:'' });
+  toast('Slack removed.','info'); pgIntegrations();
+}
+async function testSlack() {
+  try { await API.post('/settings/test-slack',{}); toast('Test message sent to Slack!','success'); }
+  catch(err) { toast(err.message,'error'); }
+}
+
+// WhatsApp helpers
+async function saveWhatsApp() {
+  const twilio_sid   = document.getElementById('waSid').value.trim();
+  const twilio_token = document.getElementById('waToken').value.trim();
+  const twilio_from  = document.getElementById('waFrom').value.trim();
+  const twilio_to    = document.getElementById('waTo').value.trim();
+  if (!twilio_sid||!twilio_from||!twilio_to) { mErr('waErr','SID, From and To required.'); return; }
+  const payload = { twilio_sid, twilio_from, twilio_to };
+  if (twilio_token !== '••••••••') payload.twilio_token = twilio_token;
+  try { await API.put('/settings', payload); toast('WhatsApp configured!','success'); pgIntegrations(); }
+  catch(err) { mErr('waErr', err.message); }
+}
+async function clearWhatsApp() {
+  await API.put('/settings', { twilio_sid:'', twilio_token:'', twilio_from:'', twilio_to:'' });
+  toast('WhatsApp removed.','info'); pgIntegrations();
+}
+
+
 (async function () {
   // Apply saved theme
   applyTheme(localStorage.getItem('mrb_theme') || 'default');
@@ -1158,6 +1553,7 @@ function dlFile(content, name, type) { const a = document.createElement('a'); a.
       document.getElementById('LP').style.display = 'none';
       document.getElementById('AP').style.display = 'block';
       await renderNav(); updTop(); updSU(); nav('dashboard'); updND();
+      loadEmailConfig(); // load EmailJS settings
       return;
     } catch {
       clearUser();

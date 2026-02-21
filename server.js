@@ -7,7 +7,6 @@ const path    = require('path');
 
 const app = express();
 
-// ─── Middleware ────────────────────────────────────────────────────────────
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
@@ -24,19 +23,22 @@ app.use('/api/bookings',      require('./routes/bookings'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/analytics',     require('./routes/analytics'));
 app.use('/api/settings',      require('./routes/settings'));
+app.use('/api/waitlist',      require('./routes/waitlist'));
+app.use('/api/amenities',     require('./routes/amenities'));
+app.use('/api/gcal',          require('./routes/gcal'));
 
-// ─── Public check-in page (QR code scan lands here) ───────────────────────
+// ─── Public check-in page ─────────────────────────────────────────────────
 app.get('/checkin/:token', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'checkin.html'));
 });
 
-// ─── Serve Frontend ────────────────────────────────────────────────────────
+// ─── Frontend ──────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
 app.get(/^(?!\/api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ─── Global Error Handler ──────────────────────────────────────────────────
+// ─── Error Handler ─────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('[ERROR]', err.message);
   res.status(500).json({ error: 'Internal server error' });
@@ -44,19 +46,12 @@ app.use((err, req, res, next) => {
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
-// ─── Start ─────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`\n🚀 MeetingBook server running on http://localhost:${PORT}`);
-  console.log(`   Environment : ${process.env.NODE_ENV || 'development'}`);
-  console.log(`   Database    : ${process.env.DB_PATH || './data/mrb.sqlite'}`);
-  console.log(`   Email SMTP  : ${process.env.SMTP_USER ? '✅ ' + process.env.SMTP_USER : '⚠️  Not configured'}\n`);
+  console.log(`\n🚀 MeetingBook server → http://localhost:${PORT}`);
+  console.log(`   Email  : ${process.env.SMTP_USER ? '✅ ' + process.env.SMTP_USER : '⚠️  Not configured'}`);
+  console.log(`   Slack  : ${process.env.SLACK_WEBHOOK ? '✅ configured' : '⚠️  Not configured'}`);
+  console.log(`   WA     : ${process.env.TWILIO_SID ? '✅ configured' : '⚠️  Not configured'}\n`);
 
-  // Start background scheduler for reminders
-  try {
-    const { startReminderJob } = require('./services/scheduler');
-    startReminderJob();
-  } catch (e) {
-    console.warn('[SCHEDULER] Could not start:', e.message);
-  }
+  try { require('./services/scheduler').startReminderJob(); } catch(e) { console.warn('[SCHEDULER]', e.message); }
 });

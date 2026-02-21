@@ -125,13 +125,13 @@ safeAddCol('bookings', 'gcal_event_id',   'TEXT DEFAULT NULL');
 
 // ─── Seed ─────────────────────────────────────────────────────────────────
 function seed() {
-  const adminEmail = process.env.ADMIN_EMAIL || 'admin@company.com';
+  const adminEmail = process.env.ADMIN_EMAIL || 'abhishek.s@slmgbev.com';
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(adminEmail);
   if (!existing) {
     const id = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const hash = bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin@123', 10);
     db.prepare(`INSERT INTO users (id, name, email, password, role) VALUES (?, ?, ?, ?, 'admin')`)
-      .run(id, process.env.ADMIN_NAME || 'Admin', adminEmail, hash);
+      .run(id, process.env.ADMIN_NAME || 'Abhishek', adminEmail, hash);
     console.log('✅ Admin seeded: ' + adminEmail);
   }
   const roomCount = db.prepare('SELECT COUNT(*) as c FROM rooms').get().c;

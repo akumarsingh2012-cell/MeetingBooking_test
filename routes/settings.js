@@ -3,16 +3,12 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/database');
 const { auth, adminOnly } = require('../middleware/auth');
-const emailSvc = require('../services/email');
 
 // GET /api/settings
 router.get('/', auth, adminOnly, (req, res) => {
   const rows = db.prepare('SELECT key, value FROM settings').all();
   const out = {};
   rows.forEach(r => { out[r.key] = r.value; });
-  // Also expose whether SMTP is configured via env
-  out.smtp_configured = emailSvc.isConfigured() ? 'true' : 'false';
-  out.smtp_user = process.env.SMTP_USER || '';
   res.json(out);
 });
 
@@ -26,14 +22,21 @@ router.put('/', auth, adminOnly, (req, res) => {
   res.json({ message: 'Settings saved' });
 });
 
-// POST /api/settings/test-email
-router.post('/test-email', auth, adminOnly, async (req, res) => {
-  const { to } = req.body;
-  if (!to) return res.status(400).json({ error: 'Recipient email required' });
-  const result = await emailSvc.sendTest(to);
-  if (result.skipped) return res.status(400).json({ error: 'SMTP not configured. Set SMTP_USER and SMTP_PASS in environment variables.' });
-  if (!result.sent) return res.status(500).json({ error: result.error || 'Failed to send email' });
-  res.json({ message: 'Test email sent to ' + to });
+// POST /api/settings/test-slack
+router.post('/test-slack', auth, adminOnly, async (req, res) => {
+  const notify = require('../services/notify');
+  if (!notify.isSlackConfigured()) return res.status(400).json({ error: 'Slack webhook not configured.' });
+  try {
+    await notify.slackNewBooking({
+      user_name: req.user.name, user_email: req.user.email,
+      room_name: 'Test Room', room_floor: '2nd Floor',
+      date: new Date().toISOString().split('T')[0],
+      start_time: '10:00', end_time: '11:00',
+      meeting_type: 'internal', purpose: 'Slack integration test',
+      status: 'approved', food: false, guest_emails: [],
+    });
+    res.json({ message: 'Test message sent to Slack!' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/settings/email-log

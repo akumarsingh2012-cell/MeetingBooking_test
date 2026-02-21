@@ -3,12 +3,9 @@
   "version": "1.0.0",
   "description": "Meeting Room Booking System - Backend API",
   "main": "server.js",
-<<<<<<< HEAD
-=======
   "engines": {
-    "node": "18.x"
+    "node": ">=18.0.0"
   },
->>>>>>> 89f4bf8ca5b7d56b6fb7585144d849b09742f0f2
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
@@ -20,7 +17,6 @@
     "dotenv": "^16.4.5",
     "express": "^4.18.3",
     "jsonwebtoken": "^9.0.2",
-<<<<<<< HEAD
     "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.3",
     "qrcode": "^1.5.3",
@@ -30,14 +26,5 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-=======
-    "multer": "^1.4.5-lts.1"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.0"
->>>>>>> 89f4bf8ca5b7d56b6fb7585144d849b09742f0f2
   }
 }

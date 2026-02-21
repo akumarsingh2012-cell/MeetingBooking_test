@@ -126,13 +126,31 @@ safeAddCol('bookings', 'gcal_event_id',   'TEXT DEFAULT NULL');
 // ─── Seed ─────────────────────────────────────────────────────────────────
 function seed() {
   const adminEmail = process.env.ADMIN_EMAIL || 'abhishek.s@slmgbev.com';
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(adminEmail);
-  if (!existing) {
+  const adminName  = process.env.ADMIN_NAME  || 'Abhishek';
+  const adminPass  = process.env.ADMIN_PASSWORD || 'admin@123';
+
+  // Check if ANY admin exists
+  const anyAdmin = db.prepare("SELECT * FROM users WHERE role = 'admin'").get();
+
+  if (!anyAdmin) {
+    // Fresh install — seed first admin
     const id = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const hash = bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin@123', 10);
+    const hash = bcrypt.hashSync(adminPass, 10);
     db.prepare(`INSERT INTO users (id, name, email, password, role) VALUES (?, ?, ?, ?, 'admin')`)
-      .run(id, process.env.ADMIN_NAME || 'Abhishek', adminEmail, hash);
+      .run(id, adminName, adminEmail, hash);
     console.log('✅ Admin seeded: ' + adminEmail);
+  } else {
+    // Admin exists — make sure the target email is active and password works
+    const target = db.prepare('SELECT * FROM users WHERE email = ?').get(adminEmail);
+    if (!target) {
+      // Email changed — update the existing admin's email + name
+      db.prepare("UPDATE users SET email = ?, name = ?, active = 1 WHERE role = 'admin'")
+        .run(adminEmail, adminName);
+      console.log('✅ Admin email updated to: ' + adminEmail);
+    } else if (!target.active) {
+      db.prepare("UPDATE users SET active = 1 WHERE email = ?").run(adminEmail);
+      console.log('✅ Admin re-activated: ' + adminEmail);
+    }
   }
   const roomCount = db.prepare('SELECT COUNT(*) as c FROM rooms').get().c;
   if (roomCount === 0) {

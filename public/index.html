@@ -483,7 +483,7 @@ async function pgEmailSettings() {
       <div style="font-weight:700;font-size:.84rem;margin-bottom:12px;">📧 Send Test Email</div>
       <div id="ejsErr"></div>
       <div style="display:flex;gap:8px;align-items:flex-end;">
-        <div class="fg" style="flex:1;margin-bottom:0;"><label class="lbl">Recipient Email</label><input id="testEmail" class="inp" type="email" placeholder="admin@company.com" value="${smtpUser}"/></div>
+        <div class="fg" style="flex:1;margin-bottom:0;"><label class="lbl">Recipient Email</label><input id="testEmail" class="inp" type="email" placeholder="abhishek.s@slmgbev.com" value="${smtpUser}"/></div>
         <button class="btn btn-blue" onclick="sendTestEmail()" ${!configured ? 'disabled title="Configure SMTP first"' : ''}><i class="fas fa-paper-plane"></i> Send Test</button>
       </div>
     </div>
